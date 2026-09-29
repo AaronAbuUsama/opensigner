@@ -155,6 +155,21 @@ jobs:
     name: Go (hot_storage)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      TEST_POSTGRES_DSN: postgres://postgres:ci-migration-password@localhost:5432/stellar_migration?sslmode=disable
+    services:
+      postgres:
+        image: postgres@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54
+        env:
+          POSTGRES_DB: stellar_migration
+          POSTGRES_PASSWORD: ci-migration-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d stellar_migration"
+          --health-interval 5s
+          --health-timeout 4s
+          --health-retries 10
     steps:
       - name: Clone repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

@@ -1,57 +1,11 @@
-import { randomBytes, randomUUID, createPublicKey, verify } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { test, expect } from '@playwright/test';
-import { Keypair, Networks, StrKey, TransactionBuilder } from '@stellar/stellar-sdk/base';
+import { Keypair, Networks, TransactionBuilder } from '@stellar/stellar-sdk/base';
 import { buildPaymentXdr } from '../../dist/index.js';
+import { accountCounts, configureProject, createAccount, createProject, login, mockStellarBalance, registerUser, signPayment, verifyEnvelope } from './helpers.mjs';
 
 const sampleUrl = 'http://localhost:7051';
 const networkSmoke = process.env.STELLAR_TESTNET_SMOKE === '1';
-
-async function configureProject(page, project) {
-  await page.fill('#existingShieldProjectId', project.id);
-  await page.fill('#existingShieldApiKey', project.api_key);
-  await page.fill('#existingShieldEncryptionPart', project.encryption_part);
-  await page.click('button[onclick="useExistingShieldProject()"]');
-  await expect(page.locator('#existingShieldStatus')).toHaveText('Project loaded for recovery');
-}
-
-async function login(page, credentials) {
-  await page.locator('.tabs .tab').nth(0).click();
-  await page.fill('#loginUsername', credentials.username);
-  await page.fill('#loginPassword', credentials.password);
-  await page.click('#login button');
-  await expect(page.locator('#authStatus')).toContainText('Login successful');
-  await page.click('#getJwtBtn');
-  await expect(page.locator('#authStatus')).toContainText('JWT token obtained');
-}
-
-async function signPayment(page, transactionXdr) {
-  await page.fill('#stellarUnsignedXdr', transactionXdr);
-  page.once('dialog', dialog => dialog.accept());
-  await page.click('#stellarSign');
-  await expect(page.locator('#stellarSignedXdr')).not.toHaveValue('');
-  return page.locator('#stellarSignedXdr').inputValue();
-}
-
-function verifyEnvelope(unsignedXdr, signedXdr, publicKey) {
-  const unsigned = TransactionBuilder.fromXdr(unsignedXdr, Networks.TESTNET);
-  const signed = TransactionBuilder.fromXdr(signedXdr, Networks.TESTNET);
-  expect(signed.hash()).toEqual(unsigned.hash());
-  expect(signed.signatures).toHaveLength(1);
-  const key = createPublicKey({
-    key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), StrKey.decodeEd25519PublicKey(publicKey)]),
-    format: 'der', type: 'spki',
-  });
-  expect(verify(null, unsigned.hash(), key, new Uint8Array(signed.signatures[0].signature.value))).toBe(true);
-}
-
-async function accountCounts(page) {
-  return page.evaluate(async () => {
-    const headers = { Authorization: `Bearer ${jwtToken}` };
-    const accounts = await fetch(`${HOT_STORAGE_SERVER}/v2/accounts?chainType=SVM`, { headers }).then(r => r.json());
-    const devices = await fetch(`${HOT_STORAGE_SERVER}/v1/devices`, { headers }).then(r => r.json());
-    return { accounts: accounts.data.length, devices: devices.data.length };
-  });
-}
 
 test('the real iframe creates, signs, and recovers the same Stellar account', async ({ browser, request }) => {
   test.setTimeout(networkSmoke ? 180000 : 90000);
@@ -59,24 +13,14 @@ test('the real iframe creates, signs, and recovers the same Stellar account', as
   expect(denied.status()).toBe(403);
   const suffix = randomUUID().slice(0, 8);
   const credentials = { username: `stellar_${suffix}`, email: `stellar-${suffix}@example.test`, password: randomBytes(24).toString('hex') };
-  const registration = await request.post('http://localhost:7053/register', { data: { name: `stellar-${suffix}`, generate_encryption_key: true } });
-  expect(registration.ok()).toBe(true);
-  const project = await registration.json();
-  const provider = await request.post('http://localhost:7053/project/providers', {
-    headers: { 'X-API-Key': project.api_key, 'X-API-Secret': project.api_secret },
-    data: { providers: { custom: { jwk: 'http://authservice:3000/.well-known/jwks.json' } } },
-  });
-  expect(provider.ok()).toBe(true);
+  const project = await createProject(request, `stellar-${suffix}`);
 
   const requests = [];
   const openContext = async () => {
     const context = await browser.newContext();
     context.on('request', request => requests.push(request.url()));
     if (!networkSmoke) {
-      await context.route('https://horizon-testnet.stellar.org/**', route => route.fulfill({
-        headers: { 'access-control-allow-origin': '*' },
-        json: { sequence: '1', balances: [{ asset_type: 'native', balance: '10000.0000000' }] },
-      }));
+      await mockStellarBalance(context);
     }
     const page = await context.newPage();
     await page.goto(sampleUrl);
@@ -85,18 +29,9 @@ test('the real iframe creates, signs, and recovers the same Stellar account', as
   };
 
   const first = await openContext();
-  await first.page.locator('.tabs .tab').nth(1).click();
-  await first.page.fill('#registerEmail', credentials.email);
-  await first.page.fill('#registerUsername', credentials.username);
-  await first.page.fill('#registerName', 'Stellar browser test');
-  await first.page.fill('#registerPassword', credentials.password);
-  await first.page.click('#register button');
-  await expect(first.page.locator('#authStatus')).toContainText('Registration successful');
+  await registerUser(first.page, credentials);
   await login(first.page, credentials);
-  await first.page.selectOption('#chainType', 'SVM');
-  await first.page.click('#createIframeBtn');
-  await expect(first.page.locator('#stellarAccount')).toContainText(/Account .* — G/);
-  const [, accountId, publicKey] = (await first.page.locator('#stellarAccount').textContent()).match(/Account ([\w-]+) — (G\w+)/);
+  const { accountId, publicKey } = await createAccount(first.page);
   const unsignedXdr = buildPaymentXdr({ publicKey, destination: publicKey, amount: '1.0000000', sequence: '1' });
   verifyEnvelope(unsignedXdr, await signPayment(first.page, unsignedXdr), publicKey);
   await first.page.evaluate(() => {

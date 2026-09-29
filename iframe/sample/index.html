@@ -360,7 +360,7 @@
 
 		async function updateStellarBalance() {
 			const { publicKey } = StellarSigner.stellarAccount(activeStellarAccount);
-			const response = await fetch(`${STELLAR_HORIZON}/accounts/${publicKey}`);
+			const response = await fetch(`${STELLAR_HORIZON}/accounts/${publicKey}`, { signal: AbortSignal.timeout(30000) });
 			if (response.status === 404) {
 				document.getElementById("stellarBalance").textContent = "Unfunded testnet account";
 				return null;
@@ -398,12 +398,15 @@
 				if (!confirm(`Sign ${details.amount} XLM to ${details.destination} on Stellar testnet?\nFee: ${details.fee} stroops`)) return;
 				await ensureIframeConnection();
 				const wallet = {
-					get: async () => activeStellarAccount,
+					get: async () => {
+						if (!activeStellarAccount) throw new Error("Recover the selected account before signing");
+						return activeStellarAccount;
+					},
 					signMessage: async (message) => {
-						const response = await iframeConnection.sign({
+						const response = await callIframe('sign', {
 							uuid: generateUUID(), message, chainType: "SVM", requireArrayify: false, requireHash: false,
 							requestConfiguration: { token: jwtToken, thirdPartyProvider: null, thirdPartyTokenType: "jwt", publishableKey: jwtToken, openfortURL: HOT_STORAGE_SERVER },
-						}, new Penpal.CallOptions({ timeout: 30000 }));
+						});
 						if (!response.success || !response.signature) throw new Error(response.error_description || "Iframe signing failed");
 						return response.signature;
 					},
@@ -422,21 +425,25 @@
 		}
 
 		async function submitStellarPayment() {
+			const transactionHash = signedStellarHash;
 			try {
 				const xdr = document.getElementById("stellarSignedXdr").value;
-				if (!xdr || !signedStellarHash) throw new Error("Sign the payment first");
+				if (!xdr || !transactionHash) throw new Error("Sign the payment first");
 				document.getElementById("stellarSubmit").disabled = true;
 				const response = await fetch(`${STELLAR_HORIZON}/transactions`, {
-					method: "POST", body: new URLSearchParams({ tx: xdr }),
+					method: "POST", body: new URLSearchParams({ tx: xdr }), signal: AbortSignal.timeout(30000),
 				});
 				const result = await response.json();
 				if (!response.ok) throw new Error(result.detail || `Submission failed: ${response.status}`);
+				if (result.hash !== transactionHash || result.successful === false) throw new Error("Transaction was not successful");
 				stellarStatus(`Confirmed transaction: ${result.hash}`);
 				await updateStellarBalance();
 			} catch (error) {
-				const result = await fetch(`${STELLAR_HORIZON}/transactions/${signedStellarHash}`).then(r => r.ok ? r.json() : null).catch(() => null);
-				stellarStatus(result ? `Confirmed transaction: ${result.hash}` : error.message);
-				if (!result && signedStellarHash) document.getElementById("stellarSubmit").disabled = false;
+				const result = transactionHash ? await fetch(`${STELLAR_HORIZON}/transactions/${transactionHash}`, { signal: AbortSignal.timeout(30000) }).then(r => r.ok ? r.json() : null).catch(() => null) : null;
+				const known = result?.hash === transactionHash;
+				stellarStatus(known && result.successful === true ? `Confirmed transaction: ${transactionHash}`
+					: known && result.successful === false ? `Transaction failed: ${transactionHash}` : error.message);
+				if (!result && signedStellarHash === transactionHash && transactionHash) document.getElementById("stellarSubmit").disabled = false;
 			}
 		}
 
@@ -578,6 +585,7 @@
 		let openfortClient = null;
 		let userId = null;
 		let iframeConnection = null;
+		let iframeTransport = null;
 		// let iframeRemote = null;
 
 		async function deleteShieldShareForUser() {
@@ -994,9 +1002,28 @@
 		}
 
 		async function ensureIframeConnection() {
-			if (iframeConnection) return;
+			if (iframeConnection && document.getElementById(WORKER_IFRAME)?.isConnected) return;
+			if (iframeTransport) resetIframeConnection();
 			const iframe = createIframe(IFRAME_SERVER);
 			await connectToIframe(iframe);
+		}
+
+		function resetIframeConnection() {
+			iframeTransport?.destroy();
+			iframeTransport = null;
+			iframeConnection = null;
+			document.getElementById(WORKER_IFRAME)?.remove();
+			clearStellarAccount();
+		}
+
+		async function callIframe(method, request) {
+			try {
+				await ensureIframeConnection();
+				return await iframeConnection[method](request, new Penpal.CallOptions({ timeout: 30000 }));
+			} catch (error) {
+				resetIframeConnection();
+				throw error;
+			}
 		}
 
 		async function initDevice() {
@@ -1167,6 +1194,7 @@
 					}
 				}
 			});
+			iframeTransport = conn;
 			iframeConnection = await conn.promise;
 			log("iFrame connection established");
 		}
@@ -1202,7 +1230,7 @@
 					},
 				};
 
-				const result = await iframeConnection.sign(request, new Penpal.CallOptions({ timeout: 30000 }));
+				const result = await callIframe('sign', request);
 				log("sign result: " + JSON.stringify(result, null, 2));
 			} catch (error) {
 				log("ERROR sign iframe: " + error.message);
@@ -1306,7 +1334,7 @@
 					}
 				};
 
-				const result = await iframeConnection.create(request, new Penpal.CallOptions({ timeout: 30000 }));
+				const result = await callIframe('create', request);
 				log("create result: " + JSON.stringify(result, null, 2));
 				if (result.success && chainType === "SVM") selectStellarAccount({ id: result.account, address: result.address, chainType });
 			} catch (error) {
@@ -1405,7 +1433,7 @@
 					shieldURL: COLD_STORAGE_SERVER,
 				};
 
-				const result = await iframeConnection.recover(request, new Penpal.CallOptions({ timeout: 30000 }));
+				const result = await callIframe('recover', request);
 				log("recover result: " + JSON.stringify(result, null, 2));
 				const accounts = await fetch(`${HOT_STORAGE_SERVER}/v2/accounts?chainType=SVM`, { headers: { Authorization: `Bearer ${jwtToken}` } }).then(r => r.json());
 				const recovered = accounts.data?.find(account => account.id === accountId);
