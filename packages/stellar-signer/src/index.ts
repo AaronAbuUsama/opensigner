@@ -41,8 +41,11 @@ export function stellarAccount(account: { id: string; address: string; chainType
 export async function getOrCreateAccount<RecoveryParams>(
   wallet: AccountWallet<RecoveryParams>, recoveryParams: RecoveryParams,
 ): Promise<StellarSigningAccount> {
-  const accounts = (await wallet.list({ accountType: 'Externally Owned Account', chainType: 'SVM', limit: 100 }))
-    .filter((account) => account.chainType === 'SVM');
+  const listed = await wallet.list({ accountType: 'Externally Owned Account', chainType: 'SVM', limit: 100 });
+  if (listed.some((account) => !['EVM', 'SVM'].includes(account.chainType))) {
+    throw new Error('Account types are unavailable; cannot safely create another account');
+  }
+  const accounts = listed.filter((account) => account.chainType === 'SVM');
   if (accounts.length === 0) {
     return stellarAccount(await wallet.create({ accountType: 'Externally Owned Account', chainType: 'SVM', recoveryParams }));
   }

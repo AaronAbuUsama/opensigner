@@ -82,6 +82,9 @@ test('reuses an active Ed25519 account and never creates over a recovery gap', a
   wallet.get = async () => { throw new Error('fresh browser'); };
   await assert.rejects(getOrCreateAccount(wallet, {}), /Recover an existing/);
   assert.equal(creates, 0);
+  wallet.list = async () => [{ ...embeddedAccount, chainType: undefined }];
+  await assert.rejects(getOrCreateAccount(wallet, {}), /cannot safely create another account/);
+  assert.equal(creates, 0);
   wallet.list = async () => [];
   assert.deepEqual(await getOrCreateAccount(wallet, {}), { accountId: embeddedAccount.id, publicKey });
   assert.equal(creates, 1);
