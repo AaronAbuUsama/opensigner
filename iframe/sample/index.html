@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 
 <head>
+	<meta charset="utf-8">
 	<title>OpenSigner Demo</title>
 	<link rel="stylesheet" href="styles.css">
 </head>
@@ -78,6 +79,12 @@
 			</button>
 		</div>
 		<div id="shieldProjectStatus"></div>
+		<h3>Use an existing project for recovery</h3>
+		<input id="existingShieldProjectId" type="text" placeholder="Project ID" />
+		<input id="existingShieldApiKey" type="password" placeholder="Project API key" />
+		<input id="existingShieldEncryptionPart" type="password" placeholder="Project encryption part" />
+		<button onclick="useExistingShieldProject()">Use project</button>
+		<p id="existingShieldStatus" role="status"></p>
 	</div>
 
 	<div class="section">
@@ -156,6 +163,8 @@
 				value="pk_test_your_key_here" />
 			<h3>Chain ID</h3>
 			<input type="text" id="chainId" placeholder="Chain ID" style="width: 100px" value="1" />
+			<h3>Key type</h3>
+			<select id="chainType"><option value="EVM">EVM</option><option value="SVM">Ed25519 (Solana / Stellar)</option></select>
 			<h3>Address</h3>
 			<input type="text" id="address" placeholder="0x... (address)" style="width: 400px"
 				value="0xcafecafecafecafecafecafecafecafecafe" />
@@ -206,6 +215,25 @@
 		<div id="output">
 			Initialize client and authenticate to start...
 		</div>
+	</div>
+
+	<div class="section">
+		<h2>Stellar testnet payment</h2>
+		<p>Create an Ed25519 account above, or recover an existing one. The Stellar address appears here after either action.</p>
+		<p id="stellarAccount">No Stellar account selected</p>
+		<label>Recipient G-address</label>
+		<input id="stellarDestination" type="text" style="width: 520px" />
+		<label>Amount (XLM)</label>
+		<input id="stellarAmount" type="text" placeholder="1.0000000" />
+		<button id="stellarBuild" onclick="buildStellarPayment()" disabled>Build payment</button>
+		<p id="stellarBalance"></p>
+		<label>Unsigned transaction XDR</label>
+		<textarea id="stellarUnsignedXdr" oninput="clearStellarSignature()" style="width: 100%; height: 90px"></textarea>
+		<button id="stellarSign" onclick="signStellarPayment()" disabled>Confirm and sign</button>
+		<label>Signed transaction XDR</label>
+		<textarea id="stellarSignedXdr" readonly style="width: 100%; height: 90px"></textarea>
+		<button id="stellarSubmit" onclick="submitStellarPayment()" disabled>Submit to testnet</button>
+		<p id="stellarStatus" role="status"></p>
 	</div>
 
 	<!-- Modal for Account Recovery -->
@@ -261,12 +289,13 @@
 	</div>
 
 	<!-- Include Penpal for iframe communication -->
-	<script src="https://unpkg.com/penpal@^7/dist/penpal.js"></script>
+	<script src="penpal.js"></script>
+	<script src="stellar-signer.js"></script>
 	<!-- Include the Openfort client -->
 	<script src="keys-client.js"></script>
 
 	<script>
-		const IFRAME_SERVER = "http://localhost:7050/index.html?debug=true";
+		const IFRAME_SERVER = "http://localhost:7050/index.html";
 		const SAMPLE_URL = "http://localhost:7051";
 		const AUTH_SERVER = "http://localhost:7052";
 		const HOT_STORAGE_SERVER = "http://localhost:7054";
@@ -279,6 +308,137 @@
 		let shieldProjectApiKey = null;
 		let shieldProjectApiSecret = null;
 		let shieldProjectEncryptionShare = null;
+		let activeStellarAccount = null;
+		let signedStellarHash = null;
+		const STELLAR_HORIZON = "https://horizon-testnet.stellar.org";
+		const STELLAR_TESTNET = "Test SDF Network ; September 2015";
+
+		function useExistingShieldProject() {
+			const id = document.getElementById("existingShieldProjectId").value.trim();
+			const apiKey = document.getElementById("existingShieldApiKey").value.trim();
+			const encryptionPart = document.getElementById("existingShieldEncryptionPart").value.trim();
+			if (!id || !apiKey || !encryptionPart) {
+				document.getElementById("existingShieldStatus").textContent = "Enter all three project values";
+				return;
+			}
+			shieldProjectId = id;
+			shieldProjectApiKey = apiKey;
+			shieldProjectEncryptionShare = encryptionPart;
+			document.getElementById("existingShieldStatus").textContent = "Project loaded for recovery";
+		}
+
+		function stellarStatus(message) {
+			document.getElementById("stellarStatus").textContent = message;
+		}
+
+		function clearStellarSignature() {
+			signedStellarHash = null;
+			document.getElementById("stellarSignedXdr").value = "";
+			document.getElementById("stellarSubmit").disabled = true;
+		}
+
+		function clearStellarAccount() {
+			activeStellarAccount = null;
+			document.getElementById("stellarAccount").textContent = "No Stellar account selected";
+			document.getElementById("stellarBalance").textContent = "";
+			document.getElementById("stellarBuild").disabled = true;
+			document.getElementById("stellarSign").disabled = true;
+			document.getElementById("stellarUnsignedXdr").value = "";
+			clearStellarSignature();
+		}
+
+		function selectStellarAccount(account) {
+			const { publicKey } = StellarSigner.stellarAccount(account);
+			activeStellarAccount = account;
+			document.getElementById("stellarAccount").textContent = `Account ${account.id} — ${publicKey}`;
+			document.getElementById("stellarBuild").disabled = false;
+			document.getElementById("stellarSign").disabled = false;
+			document.getElementById("stellarUnsignedXdr").value = "";
+			clearStellarSignature();
+			updateStellarBalance().catch(error => stellarStatus(error.message));
+		}
+
+		async function updateStellarBalance() {
+			const { publicKey } = StellarSigner.stellarAccount(activeStellarAccount);
+			const response = await fetch(`${STELLAR_HORIZON}/accounts/${publicKey}`);
+			if (response.status === 404) {
+				document.getElementById("stellarBalance").textContent = "Unfunded testnet account";
+				return null;
+			}
+			if (!response.ok) throw new Error(`Balance lookup failed: ${response.status}`);
+			const account = await response.json();
+			const xlm = account.balances.find(balance => balance.asset_type === "native");
+			document.getElementById("stellarBalance").textContent = `Balance: ${xlm?.balance ?? "0"} XLM`;
+			return account;
+		}
+
+		async function buildStellarPayment() {
+			try {
+				const account = await updateStellarBalance();
+				if (!account) throw new Error("Fund the account on Stellar testnet first");
+				const { publicKey } = StellarSigner.stellarAccount(activeStellarAccount);
+				const transactionXdr = StellarSigner.buildPaymentXdr({
+					publicKey,
+					destination: document.getElementById("stellarDestination").value.trim(),
+					amount: document.getElementById("stellarAmount").value.trim(),
+					sequence: account.sequence,
+				});
+				document.getElementById("stellarUnsignedXdr").value = transactionXdr;
+				clearStellarSignature();
+				stellarStatus("Payment built. Review it, then confirm and sign.");
+			} catch (error) { stellarStatus(error.message); }
+		}
+
+		async function signStellarPayment() {
+			try {
+				if (!activeStellarAccount) throw new Error("Create or recover an Ed25519 account first");
+				const accountId = activeStellarAccount.id;
+				const transactionXdr = document.getElementById("stellarUnsignedXdr").value.trim();
+				const details = StellarSigner.paymentDetails(transactionXdr);
+				if (!confirm(`Sign ${details.amount} XLM to ${details.destination} on Stellar testnet?\nFee: ${details.fee} stroops`)) return;
+				await ensureIframeConnection();
+				const wallet = {
+					get: async () => activeStellarAccount,
+					signMessage: async (message) => {
+						const response = await iframeConnection.sign({
+							uuid: generateUUID(), message, chainType: "SVM", requireArrayify: false, requireHash: false,
+							requestConfiguration: { token: jwtToken, thirdPartyProvider: null, thirdPartyTokenType: "jwt", publishableKey: jwtToken, openfortURL: HOT_STORAGE_SERVER },
+						}, new Penpal.CallOptions({ timeout: 30000 }));
+						if (!response.success || !response.signature) throw new Error(response.error_description || "Iframe signing failed");
+						return response.signature;
+					},
+				};
+				const result = await StellarSigner.signTransaction(wallet, {
+					accountId, transactionXdr, networkPassphrase: STELLAR_TESTNET,
+				});
+				if (activeStellarAccount?.id !== accountId || document.getElementById("stellarUnsignedXdr").value.trim() !== transactionXdr) {
+					throw new Error("The account or payment changed while signing. Review and sign again.");
+				}
+				document.getElementById("stellarSignedXdr").value = result.signedTransactionXdr;
+				document.getElementById("stellarSubmit").disabled = false;
+				signedStellarHash = result.transactionHash;
+				stellarStatus(`Signed transaction hash: ${signedStellarHash}`);
+			} catch (error) { stellarStatus(error.message); }
+		}
+
+		async function submitStellarPayment() {
+			try {
+				const xdr = document.getElementById("stellarSignedXdr").value;
+				if (!xdr || !signedStellarHash) throw new Error("Sign the payment first");
+				document.getElementById("stellarSubmit").disabled = true;
+				const response = await fetch(`${STELLAR_HORIZON}/transactions`, {
+					method: "POST", body: new URLSearchParams({ tx: xdr }),
+				});
+				const result = await response.json();
+				if (!response.ok) throw new Error(result.detail || `Submission failed: ${response.status}`);
+				stellarStatus(`Confirmed transaction: ${result.hash}`);
+				await updateStellarBalance();
+			} catch (error) {
+				const result = await fetch(`${STELLAR_HORIZON}/transactions/${signedStellarHash}`).then(r => r.ok ? r.json() : null).catch(() => null);
+				stellarStatus(result ? `Confirmed transaction: ${result.hash}` : error.message);
+				if (!result && signedStellarHash) document.getElementById("stellarSubmit").disabled = false;
+			}
+		}
 
 		// Passkey state (populated by WebAuthn ceremony)
 		let passkeyResult = null; // { id: string, key: string } after successful auth
@@ -782,6 +942,7 @@
 			jwtToken = null;
 			userId = null;
 			openfortClient = null;
+			clearStellarAccount();
 
 			document.getElementById("getJwtBtn").style.display = "none";
 			document.getElementById("logoutBtn").style.display = "none";
@@ -834,8 +995,8 @@
 
 		async function ensureIframeConnection() {
 			if (iframeConnection) return;
-			createIframe(IFRAME_SERVER);
-			await connectToIframe();
+			const iframe = createIframe(IFRAME_SERVER);
+			await connectToIframe(iframe);
 		}
 
 		async function initDevice() {
@@ -972,11 +1133,15 @@
 			return iframe;
 		}
 
-		async function connectToIframe() {
-			const iframe = document.getElementById(WORKER_IFRAME);
+		async function connectToIframe(iframe) {
+			await new Promise((resolve, reject) => {
+				const timeout = setTimeout(() => reject(new Error('Iframe load timed out')), 10000);
+				iframe.addEventListener('load', () => { clearTimeout(timeout); resolve(); }, { once: true });
+				iframe.addEventListener('error', () => { clearTimeout(timeout); reject(new Error('Iframe failed to load')); }, { once: true });
+			});
 			const messenger = new Penpal.WindowMessenger({
 				remoteWindow: iframe.contentWindow,
-				allowedOrigins: ["*"],
+				allowedOrigins: [new URL(IFRAME_SERVER).origin],
 			});
 			const conn = Penpal.connect({
 				messenger: messenger,
@@ -1037,7 +1202,7 @@
 					},
 				};
 
-				const result = await iframeConnection.sign(request);
+				const result = await iframeConnection.sign(request, new Penpal.CallOptions({ timeout: 30000 }));
 				log("sign result: " + JSON.stringify(result, null, 2));
 			} catch (error) {
 				log("ERROR sign iframe: " + error.message);
@@ -1097,6 +1262,8 @@
 
 		async function createAccountIframe() {
 			const chainId = parseInt(document.getElementById("chainId").value) || 1;
+			const chainType = document.getElementById("chainType").value;
+			clearStellarAccount();
 
 			try {
 				await ensureIframeConnection();
@@ -1109,12 +1276,11 @@
 				log("Calling create via iframe...");
 				const request = {
 					uuid: generateUUID(),
-					accountType: "Smart Account",
-					chainType: "EVM",
-					chainId,
+					accountType: chainType === "SVM" ? "Externally Owned Account" : "Smart Account",
+					chainType,
+					chainId: chainType === "SVM" ? null : chainId,
 					publishableKey: jwtToken, // TODO: should Hot Storage check this field instead of Authorization?
 					accessToken: jwtToken,
-					chainId: chainId,
 					userEntropy: "TODO",
 					projectEntropy: "TODO",
 					playerID: userId,
@@ -1140,8 +1306,9 @@
 					}
 				};
 
-				const result = await iframeConnection.create(request);
+				const result = await iframeConnection.create(request, new Penpal.CallOptions({ timeout: 30000 }));
 				log("create result: " + JSON.stringify(result, null, 2));
+				if (result.success && chainType === "SVM") selectStellarAccount({ id: result.account, address: result.address, chainType });
 			} catch (error) {
 				log("ERROR create iframe: " + error.message);
 			}
@@ -1210,6 +1377,7 @@
 			}
 
 			closeAccountIdModal();
+			clearStellarAccount();
 
 			try {
 				log(`Calling recover via iframe for account ID: ${accountId} (method: ${recoveryMethod})`);
@@ -1237,15 +1405,11 @@
 					shieldURL: COLD_STORAGE_SERVER,
 				};
 
-				log("recover request: " + JSON.stringify(request, null, 2));
-
-				// Race with a timeout so we can detect hangs
-				const timeoutMs = 30000;
-				const result = await Promise.race([
-					iframeConnection.recover(request),
-					new Promise((_, reject) => setTimeout(() => reject(new Error(`recover timed out after ${timeoutMs/1000}s — check browser console for iframe errors`)), timeoutMs)),
-				]);
+				const result = await iframeConnection.recover(request, new Penpal.CallOptions({ timeout: 30000 }));
 				log("recover result: " + JSON.stringify(result, null, 2));
+				const accounts = await fetch(`${HOT_STORAGE_SERVER}/v2/accounts?chainType=SVM`, { headers: { Authorization: `Bearer ${jwtToken}` } }).then(r => r.json());
+				const recovered = accounts.data?.find(account => account.id === accountId);
+				if (result.success && recovered) selectStellarAccount(recovered);
 			} catch (error) {
 				log("ERROR recover iframe: " + (error.message || JSON.stringify(error)));
 			}

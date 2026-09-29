@@ -175,6 +175,7 @@ func handleRegisterDeviceV2(w http.ResponseWriter, r *http.Request) {
 	resp := EmbeddedResponse{
 		Address:      account.Address,
 		ChainID:      account.ChainId,
+		ChainType:    account.ChainType,
 		DeviceID:     device.ID,
 		Device:       device.ID,
 		Account:      account.ID,
@@ -268,6 +269,9 @@ func handleListAccountsV2(w http.ResponseWriter, r *http.Request) {
 
 	var accounts []Account
 	query := db.Where("username = ? AND auth_provider = ?", userId, authProvider)
+	if chainType := r.URL.Query().Get("chainType"); chainType != "" {
+		query = query.Where("chain_type = ?", chainType)
+	}
 	if err := query.Limit(limit).Find(&accounts).Error; err != nil {
 		http.Error(w, "failed to select users' accounts", http.StatusInternalServerError)
 		return
@@ -277,11 +281,12 @@ func handleListAccountsV2(w http.ResponseWriter, r *http.Request) {
 
 	for _, acc := range accounts {
 		accountsResponse = append(accountsResponse, AccountResponse{
-			ID:       acc.ID,
-			Address:  acc.Address,
-			Username: acc.Username,
-			ChainId:  acc.ChainId,
-			SignerId: acc.SignerId,
+			ID:        acc.ID,
+			Address:   acc.Address,
+			Username:  acc.Username,
+			ChainId:   acc.ChainId,
+			ChainType: acc.ChainType,
+			SignerId:  acc.SignerId,
 		})
 	}
 
@@ -346,6 +351,13 @@ func handleCreateDeviceV2(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	if req.ChainType == "" {
+		req.ChainType = "EVM"
+	}
+	if req.ChainType != "EVM" && req.ChainType != "SVM" {
+		http.Error(w, "unsupported chain type", http.StatusBadRequest)
+		return
+	}
 
 	userId, authProvider, ok := authContext(r)
 	if !ok {
@@ -395,6 +407,7 @@ func handleCreateDeviceV2(w http.ResponseWriter, r *http.Request) {
 			Address:      req.Address,
 			Username:     userId,
 			ChainId:      req.ChainId,
+			ChainType:    req.ChainType,
 			AuthProvider: authProvider,
 			SignerId:     signer.ID,
 		}
@@ -405,6 +418,7 @@ func handleCreateDeviceV2(w http.ResponseWriter, r *http.Request) {
 		resp = EmbeddedResponse{
 			Address:      req.Address,
 			ChainID:      req.ChainId,
+			ChainType:    req.ChainType,
 			DeviceID:     device.ID,
 			Device:       device.ID,
 			Account:      newAccount.ID,
@@ -562,6 +576,7 @@ func handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 				Address:      req.Address,
 				Username:     userId,
 				ChainId:      req.ChainID,
+				ChainType:    "EVM",
 				AuthProvider: authProvider,
 				SignerId:     signer.ID,
 			}
@@ -774,6 +789,13 @@ func handleImportShare(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "address, share and userId are required", http.StatusBadRequest)
 		return
 	}
+	if req.ChainType == "" {
+		req.ChainType = "EVM"
+	}
+	if req.ChainType != "EVM" && req.ChainType != "SVM" {
+		http.Error(w, "unsupported chain type", http.StatusBadRequest)
+		return
+	}
 
 	userId, authProvider, ok := authContext(r)
 	if !ok {
@@ -836,6 +858,7 @@ func handleImportShare(w http.ResponseWriter, r *http.Request) {
 			Address:      accAddress,
 			Username:     userId,
 			ChainId:      req.ChainId,
+			ChainType:    req.ChainType,
 			SignerId:     signer.ID,
 			AuthProvider: authProvider,
 		}

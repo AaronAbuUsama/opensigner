@@ -116,6 +116,40 @@ func TestListAccountsIsScopedToUserAndProvider(t *testing.T) {
 	}
 }
 
+func TestChainTypeRoundTripAndFilter(t *testing.T) {
+	setupHandlerTest(t)
+	seedAccount(t, "alice", "default", "0xlegacy")
+
+	h := apiMux()
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, asUser(httptest.NewRequest(http.MethodPost, "/v2/devices/create", strings.NewReader(`{"address":"stellar-key","share":"some-share","chainType":"SVM"}`)), "alice", "default"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("create SVM account got %d: %s", w.Code, w.Body.String())
+	}
+	var created EmbeddedResponse
+	if err := json.NewDecoder(w.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.ChainType != "SVM" {
+		t.Fatalf("created chain type = %q, want SVM", created.ChainType)
+	}
+
+	for chainType, address := range map[string]string{"SVM": "stellar-key", "EVM": "0xlegacy"} {
+		w = httptest.NewRecorder()
+		h.ServeHTTP(w, asUser(httptest.NewRequest(http.MethodGet, "/v2/accounts?chainType="+chainType, nil), "alice", "default"))
+		if w.Code != http.StatusOK {
+			t.Fatalf("list %s got %d", chainType, w.Code)
+		}
+		var listed AccountListResponse
+		if err := json.NewDecoder(w.Body).Decode(&listed); err != nil {
+			t.Fatal(err)
+		}
+		if len(listed.Data) != 1 || listed.Data[0].Address != address || listed.Data[0].ChainType != chainType {
+			t.Fatalf("list %s returned %+v", chainType, listed.Data)
+		}
+	}
+}
+
 func TestImportShareConflicts(t *testing.T) {
 	setupHandlerTest(t)
 	account, _ := seedAccount(t, "bob", "default", "0xheld")

@@ -127,6 +127,10 @@ For configuration details, see [`docker-compose.yml`](docker-compose.yml) and th
 
 ---
 
+## Stellar testnet signing
+
+The iframe sample now includes an Ed25519 account and native XLM payment flow. See the [Stellar signer guide](packages/stellar-signer/README.md) for setup, recovery, supported transactions, verification, and the pinned dependency limitation.
+
 ## Features
 
 - **Open‑source & self‑hostable** – MIT‑licensed, production‑ready key management that you can run on your own infrastructure.

@@ -1,4 +1,5 @@
-packages: []
+packages:
+  - packages/*
 
 # pnpm 10 reads overrides from here. newman (the Postman runner used by the
 # API end-to-end CI job) is at its latest release but pulls transitive

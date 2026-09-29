@@ -1,0 +1,21 @@
+{
+  "name": "@opensigner/stellar-signer",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:browser": "node scripts/build-browser.mjs",
+    "test": "pnpm build && pnpm build:browser && node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@stellar/stellar-sdk": "17.1.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.9",
+    "typescript": "5.8.3"
+  }
+}

@@ -1,0 +1,10 @@
+.git
+.env
+.env.*
+**/node_modules
+**/dist
+iframe/sample/stellar-signer.js
+iframe/sample/penpal.js
+iframe/sample/penpal-LICENSE
+iframe/sample/LICENSE
+iframe/sample/licenses

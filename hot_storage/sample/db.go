@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"log/slog"
+	"math/big"
 	"os"
+	"strings"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -42,7 +44,7 @@ func initDB() error {
 	if err := newDB.AutoMigrate(&Signer{}); err != nil {
 		return err
 	}
-	if err := newDB.AutoMigrate(&Account{}); err != nil {
+	if err := migrateAccountChainTypes(newDB); err != nil {
 		return err
 	}
 	if err := newDB.AutoMigrate(&MigratedAccountData{}); err != nil {
@@ -52,6 +54,47 @@ func initDB() error {
 	db = newDB
 	slog.Info("DB initialized")
 	return nil
+}
+
+func migrateAccountChainTypes(database *gorm.DB) error {
+	return database.Transaction(func(tx *gorm.DB) error {
+		hadChainType := tx.Migrator().HasColumn(&Account{}, "chain_type")
+		if err := tx.AutoMigrate(&Account{}); err != nil {
+			return err
+		}
+		if hadChainType {
+			return nil
+		}
+		// ponytail: one-time account scan; use batched migration for a large store.
+		var accounts []Account
+		if err := tx.Unscoped().Find(&accounts).Error; err != nil {
+			return err
+		}
+		for _, account := range accounts {
+			if isEd25519Address(account.Address) {
+				if err := tx.Unscoped().Model(&Account{}).Where("id = ?", account.ID).Update("chain_type", "SVM").Error; err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+}
+
+func isEd25519Address(address string) bool {
+	if len(address) < 32 || len(address) > 44 {
+		return false
+	}
+	const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+	var value big.Int
+	for _, character := range address {
+		digit := strings.IndexRune(alphabet, character)
+		if digit < 0 {
+			return false
+		}
+		value.Mul(&value, big.NewInt(58)).Add(&value, big.NewInt(int64(digit)))
+	}
+	return len(value.Bytes())+len(address)-len(strings.TrimLeft(address, "1")) == 32
 }
 
 // assertSharesAreBound fails when any stored share predates the device-bound

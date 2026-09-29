@@ -37,6 +37,7 @@ type EmbeddedResponse struct {
 	Share        string `json:"share"`
 	Address      string `json:"address"`
 	ChainID      int64  `json:"chainId"`
+	ChainType    string `json:"chainType"`
 	DeviceID     string `json:"deviceId"`
 	Device       string `json:"device"`
 	Account      string `json:"account"`
@@ -71,6 +72,7 @@ type Account struct {
 	Address      string `gorm:"uniqueIndex:idx_account_address" json:"address"`
 	Username     string `json:"username"` // also referred as userId in the code
 	ChainId      int64  `json:"chainId"`
+	ChainType    string `gorm:"not null;default:EVM" json:"chainType"`
 	AuthProvider string `json:"auth_provider"`
 	SignerId     string `json:"signerId"`
 }
@@ -101,11 +103,12 @@ type DeviceListResponse struct {
 }
 
 type AccountResponse struct {
-	ID       string `gorm:"primaryKey" json:"id"`
-	Address  string `json:"address"`
-	Username string `json:"username"`
-	ChainId  int64  `json:"chainId"`
-	SignerId string `json:"signerId"`
+	ID        string `gorm:"primaryKey" json:"id"`
+	Address   string `json:"address"`
+	Username  string `json:"username"`
+	ChainId   int64  `json:"chainId"`
+	ChainType string `json:"chainType"`
+	SignerId  string `json:"signerId"`
 }
 
 type AccountListResponse struct {

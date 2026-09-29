@@ -136,6 +136,13 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 
 iframe/iframe
+iframe/sample/stellar-signer.js
+iframe/sample/penpal.js
+iframe/sample/penpal-LICENSE
+iframe/sample/LICENSE
+iframe/sample/licenses/
+test-results/
+playwright-report/
 
 CLAUDE.md
 # Compiled Go sample binary
